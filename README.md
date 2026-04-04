@@ -1,6 +1,8 @@
-# companion-capture
-
-Capture AI companion speech bubble messages from Claude Code terminal sessions.
+<div align="center">
+  <img src="docs/logo.png" alt="companion-capture" width="200">
+  <h1>companion-capture</h1>
+  <p>Capture AI companion speech bubble messages from Claude Code terminal sessions.</p>
+</div>
 
 When Claude Code runs, a small companion character appears beside the input box and occasionally comments in a speech bubble. These messages are ephemeral — they vanish as the TUI redraws. **companion-capture** watches the terminal output, extracts those bubbles, and saves them to markdown files you can read later.
 
