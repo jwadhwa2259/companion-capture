@@ -9,6 +9,12 @@
 # Skips entirely if neither file has been modified since last check (mtime guard).
 # Markers are project-scoped so multi-session reads don't skip each other's entries.
 
+# Read hook input from stdin (non-interactive only)
+HOOK_INPUT=""
+if [ ! -t 0 ]; then
+    HOOK_INPUT=$(cat)
+fi
+
 CAPTURES_FILE="${COMPANION_CAPTURES_FILE:-$HOME/.claude/Companion-captures.md}"
 DEBUG_FILE="${COMPANION_DEBUG_FILE:-$HOME/.claude/Companion-debug.md}"
 LOG_DIR="${COMPANION_LOG_DIR:-$HOME/.companion-capture/logs}"
@@ -84,3 +90,14 @@ check_file() {
 
 check_file "$CAPTURES_FILE" "vibe"
 check_file "$DEBUG_FILE" "debug"
+
+# --- Recall (opt-in) — surface recent captures on Read events ---
+if [ "${COMPANION_RECALL_ENABLED:-false}" = "true" ]; then
+    TOOL_NAME=""
+    if [ -n "$HOOK_INPUT" ]; then
+        TOOL_NAME=$(printf '%s' "$HOOK_INPUT" | python3 -c "import sys,json; print(json.load(sys.stdin).get('tool_name',''))" 2>/dev/null)
+    fi
+    if [ "$TOOL_NAME" = "Read" ]; then
+        python3 -m companion_capture.recall 2>/dev/null
+    fi
+fi

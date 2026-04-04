@@ -22,7 +22,8 @@ import time
 from datetime import datetime
 from pathlib import Path
 
-from companion_capture.config import Config
+from companion_capture.config import SCHEMA_VERSION, Config  # noqa: F401
+from companion_capture.store import CaptureStore  # noqa: F401
 
 # --- ANSI stripping (used by sweep mode) -------------------------------------
 
@@ -453,15 +454,25 @@ def _append_entry(
         pass
 
 
-def append_capture(message: str, tag: str, config: Config) -> None:
-    """Route entry to captures (vibe) or debug file by tag."""
+def append_capture(
+    message: str,
+    tag: str,
+    config: Config,
+    store: CaptureStore | None = None,
+    session_id: str = "",
+) -> None:
+    """Route entry to captures (vibe) or debug file by tag, then SQLite."""
+    project = get_project_name()
+    if config.should_exclude(message, project):
+        return
+
     now = datetime.now()
     time_str = now.strftime("%H:%M")
     today_header = f"### {now.strftime('%Y-%m-%d')}"
-    project = get_project_name()
     entry_id = config.generate_entry_id()
     entry = f"{entry_id}\n- `[{tag}]` `{time_str}` `{project}` — {message}"
 
+    # Markdown write (primary)
     if tag == "debug":
         _append_entry(
             config.debug_file,
@@ -477,6 +488,21 @@ def append_capture(message: str, tag: str, config: Config) -> None:
             entry,
             today_header,
             config.companion_name,
+        )
+
+    # SQLite dual-write (additive — failure is silent)
+    if store is not None:
+        # Extract UUID and timestamp from the entry_id HTML comment
+        id_match = re.search(r"id:([0-9a-f-]+)", entry_id)
+        ts_match = re.search(r"ts:(\S+)", entry_id)
+        store.insert(
+            id=id_match.group(1) if id_match else entry_id,
+            timestamp=ts_match.group(1) if ts_match else now.isoformat(),
+            project=project,
+            session_id=session_id,
+            raw_text=message,
+            classification=tag,
+            schema_version=SCHEMA_VERSION,
         )
 
 
@@ -547,7 +573,9 @@ def _best_message(msgs: list[str]) -> str | None:
 # --- Main loops ---------------------------------------------------------------
 
 
-def watch_live(log_path: str, config: Config) -> None:
+def watch_live(
+    log_path: str, config: Config, store: CaptureStore | None = None
+) -> None:
     """Stream the log via tail -f, using a virtual screen buffer.
 
     Architecture:
@@ -662,7 +690,7 @@ def watch_live(log_path: str, config: Config) -> None:
                     # SIGUSR1 — write immediately, skip two-scan wait
                     if _is_novel(n, seen_norm):
                         seen_norm.add(n)
-                        append_capture(best, classify(best), config)
+                        append_capture(best, classify(best), config, store, session_id)
                     prev_scan_norm = None
                     prev_scan_msg = None
                     screen.reset()
@@ -674,7 +702,9 @@ def watch_live(log_path: str, config: Config) -> None:
                         to_write, tn = prev_scan_msg, prev_scan_norm
                     if _is_novel(tn, seen_norm):
                         seen_norm.add(tn)
-                        append_capture(to_write, classify(to_write), config)
+                        append_capture(
+                            to_write, classify(to_write), config, store, session_id
+                        )
                     prev_scan_norm = None
                     prev_scan_msg = None
                     screen.reset()
@@ -684,7 +714,13 @@ def watch_live(log_path: str, config: Config) -> None:
                     # partial render of the new bubble — flush it.
                     if prev_scan_norm and _is_novel(prev_scan_norm, seen_norm):
                         seen_norm.add(prev_scan_norm)
-                        append_capture(prev_scan_msg, classify(prev_scan_msg), config)
+                        append_capture(
+                            prev_scan_msg,
+                            classify(prev_scan_msg),
+                            config,
+                            store,
+                            session_id,
+                        )
                         screen.reset()
                     prev_scan_norm = n
                     prev_scan_msg = best
@@ -699,7 +735,11 @@ def watch_live(log_path: str, config: Config) -> None:
                         if _is_novel(prev_scan_norm, seen_norm):
                             seen_norm.add(prev_scan_norm)
                             append_capture(
-                                prev_scan_msg, classify(prev_scan_msg), config
+                                prev_scan_msg,
+                                classify(prev_scan_msg),
+                                config,
+                                store,
+                                session_id,
                             )
                         prev_scan_norm = None
                         prev_scan_msg = None
@@ -721,7 +761,7 @@ def watch_live(log_path: str, config: Config) -> None:
         tail.wait()
 
 
-def sweep(log_path: str, config: Config) -> None:
+def sweep(log_path: str, config: Config, store: CaptureStore | None = None) -> None:
     """Single pass over the entire log file — catches anything missed live.
 
     Uses ScreenBuffer (same as live mode) so sweep output matches live
@@ -755,7 +795,7 @@ def sweep(log_path: str, config: Config) -> None:
         n = _normalize(msg)
         if _is_novel(n, existing_norm):
             tag = classify(msg)
-            append_capture(msg, tag, config)
+            append_capture(msg, tag, config, store)
             existing_norm.add(n)
 
 
@@ -775,10 +815,20 @@ def main(config: Config | None = None) -> None:
 
     log_file = sys.argv[1]
 
-    if "--sweep" in sys.argv:
-        sweep(log_file, config)
-    else:
-        watch_live(log_file, config)
+    store = CaptureStore(config.db_path, debug=config.debug)
+    try:
+        store.open()
+    except Exception:
+        store = None
+
+    try:
+        if "--sweep" in sys.argv:
+            sweep(log_file, config, store)
+        else:
+            watch_live(log_file, config, store)
+    finally:
+        if store is not None:
+            store.close()
 
 
 if __name__ == "__main__":

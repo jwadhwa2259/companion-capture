@@ -703,6 +703,92 @@ class TestAppendCapture:
         assert len(id_lines) == 1
 
 
+class TestAppendCaptureExclusion:
+    """Privacy controls — exclusion at capture time."""
+
+    def test_exclude_pattern_blocks_write(self, tmp_path):
+        config = Config(
+            companion_name="TestCompanion",
+            output_dir=str(tmp_path),
+            log_dir=str(tmp_path / "logs"),
+            exclude_patterns=[r"secret\b"],
+        )
+        append_capture("this is secret info", "vibe", config)
+        assert not config.captures_file.exists()
+
+    def test_exclude_pattern_allows_non_matching(self, tmp_path):
+        config = Config(
+            companion_name="TestCompanion",
+            output_dir=str(tmp_path),
+            log_dir=str(tmp_path / "logs"),
+            exclude_patterns=[r"password"],
+        )
+        append_capture("just a normal message", "vibe", config)
+        assert config.captures_file.exists()
+        assert "normal message" in config.captures_file.read_text()
+
+    def test_excluded_project_blocks_write(self, tmp_path, monkeypatch):
+        config = Config(
+            companion_name="TestCompanion",
+            output_dir=str(tmp_path),
+            log_dir=str(tmp_path / "logs"),
+            excluded_projects=["secret-*"],
+        )
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name",
+            lambda: "secret-project",
+        )
+        append_capture("hello world", "vibe", config)
+        assert not config.captures_file.exists()
+
+    def test_excluded_project_allows_non_matching(self, tmp_path, monkeypatch):
+        config = Config(
+            companion_name="TestCompanion",
+            output_dir=str(tmp_path),
+            log_dir=str(tmp_path / "logs"),
+            excluded_projects=["secret-*"],
+        )
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name",
+            lambda: "public-project",
+        )
+        append_capture("hello world", "vibe", config)
+        assert config.captures_file.exists()
+
+    def test_exclusion_blocks_sqlite_too(self, tmp_path):
+        config = Config(
+            companion_name="TestCompanion",
+            output_dir=str(tmp_path),
+            log_dir=str(tmp_path / "logs"),
+            exclude_patterns=[r"secret"],
+        )
+        from companion_capture.store import CaptureStore
+
+        db_path = tmp_path / "test.db"
+        with CaptureStore(db_path) as store:
+            append_capture("this is secret", "vibe", config, store=store)
+            assert store.recent(limit=10) == []
+
+    def test_exclusion_blocks_debug_too(self, tmp_path):
+        config = Config(
+            companion_name="TestCompanion",
+            output_dir=str(tmp_path),
+            log_dir=str(tmp_path / "logs"),
+            exclude_patterns=[r"token"],
+        )
+        append_capture("auth token leaked", "debug", config)
+        assert not config.debug_file.exists()
+
+    def test_no_exclusion_writes_normally(self, tmp_path):
+        config = Config(
+            companion_name="TestCompanion",
+            output_dir=str(tmp_path),
+            log_dir=str(tmp_path / "logs"),
+        )
+        append_capture("hello", "vibe", config)
+        assert config.captures_file.exists()
+
+
 # =============================================================================
 # Sweep mode — end-to-end
 # =============================================================================

@@ -6,11 +6,13 @@ Precedence: hardcoded defaults < config file < environment variables.
 from __future__ import annotations
 
 import datetime
+import fnmatch  # noqa: F401
 import json
 import os
 import re
+import sys  # noqa: F401
 import uuid
-from dataclasses import dataclass, fields
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 
 _SAFE_NAME_RE = re.compile(r"^[a-zA-Z0-9_ -]+$")
@@ -28,6 +30,11 @@ _ENV_MAP = {
     "rotation_days": "ROTATION_DAYS",
     "archive_days": "ARCHIVE_DAYS",
     "debug": "DEBUG",
+    "exclude_patterns": "EXCLUDE_PATTERNS",
+    "excluded_projects": "EXCLUDED_PROJECTS",
+    "recall_enabled": "RECALL_ENABLED",
+    "recall_max_results": "RECALL_MAX_RESULTS",
+    "recall_cooldown_seconds": "RECALL_COOLDOWN_SECONDS",
 }
 
 
@@ -43,6 +50,11 @@ class Config:
     rotation_days: int = 7
     archive_days: int = 90
     debug: bool = False
+    exclude_patterns: list[str] = field(default_factory=list)
+    excluded_projects: list[str] = field(default_factory=list)
+    recall_enabled: bool = False
+    recall_max_results: int = 3
+    recall_cooldown_seconds: int = 60
 
     def __post_init__(self) -> None:
         # Normalize and validate companion_name — blocks shell injection,
@@ -89,13 +101,23 @@ class Config:
         kwargs = {k: v for k, v in file_overrides.items() if k in valid_keys}
 
         # Apply env var overrides
+        _LIST_FIELDS = {"exclude_patterns", "excluded_projects"}
         for field_name, env_suffix in _ENV_MAP.items():
             env_val = os.environ.get(f"{_ENV_PREFIX}{env_suffix}")
             if env_val is not None:
-                if field_name == "debug":
+                if field_name in ("debug", "recall_enabled"):
                     kwargs[field_name] = _parse_bool(env_val)
-                elif field_name in ("rotation_days", "archive_days"):
+                elif field_name in (
+                    "rotation_days",
+                    "archive_days",
+                    "recall_max_results",
+                    "recall_cooldown_seconds",
+                ):
                     kwargs[field_name] = int(env_val)
+                elif field_name in _LIST_FIELDS:
+                    kwargs[field_name] = [
+                        item.strip() for item in env_val.split(",") if item.strip()
+                    ]
                 else:
                     kwargs[field_name] = env_val
 
@@ -116,6 +138,27 @@ class Config:
     @property
     def archive_file(self) -> Path:
         return Path(self.output_dir) / f"{self.companion_name}-archive.md"
+
+    @property
+    def db_path(self) -> Path:
+        return self.config_dir / "captures.db"
+
+    def should_exclude(self, message: str, project: str) -> bool:
+        """Return True if message or project matches any exclusion pattern."""
+        for pattern in self.exclude_patterns:
+            try:
+                if re.search(pattern, message):
+                    return True
+            except re.error:
+                if self.debug:
+                    print(
+                        f"companion-capture: invalid regex in exclude_patterns: {pattern!r}",
+                        file=sys.stderr,
+                    )
+        for proj_pattern in self.excluded_projects:
+            if fnmatch.fnmatch(project, proj_pattern):
+                return True
+        return False
 
     def ensure_dirs(self) -> None:
         """Create config_dir, log_dir, and output_dir if they don't exist."""
