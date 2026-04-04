@@ -89,6 +89,66 @@ companion-capture migrate  # migrate from a previous Keel installation
 companion-capture --version
 ```
 
+### Search & Query (v2)
+
+All captures are stored in both markdown files and a local SQLite database, enabling fast search and filtering.
+
+```bash
+# Full-text search
+companion-capture search "auth bug"
+companion-capture search "token" --project my-app --since 7d
+
+# Recent captures
+companion-capture recent
+companion-capture recent --project my-app -n 10
+
+# Statistics
+companion-capture stats
+```
+
+### Import Existing Captures
+
+Backfill your existing markdown captures into SQLite for searchability:
+
+```bash
+companion-capture import --dry-run  # preview what would be imported
+companion-capture import            # run the import
+```
+
+### Privacy Controls (v2)
+
+Prevent sensitive content from being captured, or redact it retroactively.
+
+**At capture time** — add patterns to `config.json`:
+
+```json
+{
+  "exclude_patterns": ["password", "token_[a-f0-9]+"],
+  "excluded_projects": ["secret-*", "internal-tools"]
+}
+```
+
+**Retroactive cleanup:**
+
+```bash
+companion-capture redact --pattern "secret_key"           # dry-run (shows matches)
+companion-capture redact --pattern "secret_key" --confirm  # actually delete
+```
+
+### Contextual Recall (v2, opt-in)
+
+When enabled, companion-capture surfaces recent captures for the current project each time Claude reads a file. This gives Claude automatic context about what the companion has observed.
+
+```json
+{
+  "recall_enabled": true,
+  "recall_max_results": 3,
+  "recall_cooldown_seconds": 60
+}
+```
+
+Recall is off by default, rate-limited (1 query per 60s per project), and only triggers on `Read` tool events.
+
 ## Configuration
 
 Config lives at `~/.companion-capture/config.json`. All fields are optional — defaults are used for anything not specified.
@@ -100,7 +160,12 @@ Config lives at `~/.companion-capture/config.json`. All fields are optional — 
   "log_dir": "~/.companion-capture/logs/",
   "rotation_days": 7,
   "archive_days": 90,
-  "debug": false
+  "debug": false,
+  "exclude_patterns": [],
+  "excluded_projects": [],
+  "recall_enabled": false,
+  "recall_max_results": 3,
+  "recall_cooldown_seconds": 60
 }
 ```
 
@@ -108,14 +173,19 @@ Config lives at `~/.companion-capture/config.json`. All fields are optional — 
 
 Defaults < config file < environment variables
 
-| Config Field     | Env Var                   | Default                      |
-| ---------------- | ------------------------- | ---------------------------- |
-| `companion_name` | `COMPANION_NAME`          | `Companion`                  |
-| `output_dir`     | `COMPANION_OUTPUT_DIR`    | `~/.claude/`                 |
-| `log_dir`        | `COMPANION_LOG_DIR`       | `~/.companion-capture/logs/` |
-| `rotation_days`  | `COMPANION_ROTATION_DAYS` | `7`                          |
-| `archive_days`   | `COMPANION_ARCHIVE_DAYS`  | `90`                         |
-| `debug`          | `COMPANION_DEBUG`         | `false`                      |
+| Config Field              | Env Var                             | Default                      |
+| ------------------------- | ----------------------------------- | ---------------------------- |
+| `companion_name`          | `COMPANION_NAME`                    | `Companion`                  |
+| `output_dir`              | `COMPANION_OUTPUT_DIR`              | `~/.claude/`                 |
+| `log_dir`                 | `COMPANION_LOG_DIR`                 | `~/.companion-capture/logs/` |
+| `rotation_days`           | `COMPANION_ROTATION_DAYS`           | `7`                          |
+| `archive_days`            | `COMPANION_ARCHIVE_DAYS`            | `90`                         |
+| `debug`                   | `COMPANION_DEBUG`                   | `false`                      |
+| `exclude_patterns`        | `COMPANION_EXCLUDE_PATTERNS`        | `[]`                         |
+| `excluded_projects`       | `COMPANION_EXCLUDED_PROJECTS`       | `[]`                         |
+| `recall_enabled`          | `COMPANION_RECALL_ENABLED`          | `false`                      |
+| `recall_max_results`      | `COMPANION_RECALL_MAX_RESULTS`      | `3`                          |
+| `recall_cooldown_seconds` | `COMPANION_RECALL_COOLDOWN_SECONDS` | `60`                         |
 
 ## Migrating from Keel
 
@@ -135,15 +205,17 @@ companion-capture/
 │   ├── __init__.py        # version
 │   ├── parser.py          # VT100 screen buffer + bubble extraction
 │   ├── config.py          # JSON config model
-│   ├── store.py           # SQLite event store (v2)
-│   └── cli.py             # doctor, migrate commands
+│   ├── store.py           # SQLite event store + FTS5 search
+│   ├── importer.py        # markdown → SQLite backfill
+│   ├── recall.py          # opt-in contextual recall
+│   └── cli.py             # doctor, migrate, search, import, redact
 ├── scripts/
 │   ├── wrapper.sh         # session wrapper (script -q -F)
-│   ├── check.sh           # PostToolUse hook
+│   ├── check.sh           # PostToolUse hook + recall trigger
 │   ├── archive.sh         # capture rotation
 │   ├── install.sh         # idempotent installer
 │   └── uninstall.sh       # clean removal
-├── tests/                 # 218 pytest cases
+├── tests/                 # 411 pytest cases
 ├── pyproject.toml
 └── .github/workflows/ci.yml
 ```

@@ -392,3 +392,208 @@ class TestEnsureDirs:
         cfg.ensure_dirs()  # no error on second call
         assert out.is_dir()
         assert log.is_dir()
+
+
+# -- Privacy controls: exclude_patterns / excluded_projects ------------------
+
+
+class TestExcludeDefaults:
+    def test_default_exclude_patterns_empty(self, tmp_path: Path) -> None:
+        cfg = Config.load(config_path=tmp_path / "nonexistent.json")
+        assert cfg.exclude_patterns == []
+
+    def test_default_excluded_projects_empty(self, tmp_path: Path) -> None:
+        cfg = Config.load(config_path=tmp_path / "nonexistent.json")
+        assert cfg.excluded_projects == []
+
+
+@pytest.mark.usefixtures("_clean_env")
+class TestExcludeConfigFile:
+    def test_load_exclude_patterns_from_json(self, config_file: Path) -> None:
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            json.dumps({"exclude_patterns": ["secret", "password\\d+"]})
+        )
+        cfg = Config.load(config_path=config_file)
+        assert cfg.exclude_patterns == ["secret", "password\\d+"]
+
+    def test_load_excluded_projects_from_json(self, config_file: Path) -> None:
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            json.dumps({"excluded_projects": ["secret-*", "internal-tools"]})
+        )
+        cfg = Config.load(config_path=config_file)
+        assert cfg.excluded_projects == ["secret-*", "internal-tools"]
+
+
+@pytest.mark.usefixtures("_clean_env")
+class TestExcludeEnvVars:
+    def test_exclude_patterns_from_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("COMPANION_EXCLUDE_PATTERNS", "secret,password\\d+")
+        cfg = Config.load(config_path=tmp_path / "none.json")
+        assert cfg.exclude_patterns == ["secret", "password\\d+"]
+
+    def test_excluded_projects_from_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("COMPANION_EXCLUDED_PROJECTS", "secret-*,internal-tools")
+        cfg = Config.load(config_path=tmp_path / "none.json")
+        assert cfg.excluded_projects == ["secret-*", "internal-tools"]
+
+    def test_env_strips_whitespace(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("COMPANION_EXCLUDE_PATTERNS", " foo , bar , baz ")
+        cfg = Config.load(config_path=tmp_path / "none.json")
+        assert cfg.exclude_patterns == ["foo", "bar", "baz"]
+
+    def test_env_filters_empty_items(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("COMPANION_EXCLUDE_PATTERNS", "foo,,bar,,,")
+        cfg = Config.load(config_path=tmp_path / "none.json")
+        assert cfg.exclude_patterns == ["foo", "bar"]
+
+    def test_env_overrides_config_file(
+        self, config_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(json.dumps({"exclude_patterns": ["from-file"]}))
+        monkeypatch.setenv("COMPANION_EXCLUDE_PATTERNS", "from-env")
+        cfg = Config.load(config_path=config_file)
+        assert cfg.exclude_patterns == ["from-env"]
+
+
+class TestShouldExclude:
+    def test_message_matches_pattern(self) -> None:
+        cfg = Config(exclude_patterns=["secret", "password"])
+        assert cfg.should_exclude("this is a secret message", "proj") is True
+
+    def test_message_matches_regex_pattern(self) -> None:
+        cfg = Config(exclude_patterns=[r"token_[a-f0-9]+"])
+        assert cfg.should_exclude("found token_abc123 in logs", "proj") is True
+
+    def test_project_matches_excluded_projects(self) -> None:
+        cfg = Config(excluded_projects=["secret-*", "internal-tools"])
+        assert cfg.should_exclude("hello", "secret-project") is True
+
+    def test_project_exact_match(self) -> None:
+        cfg = Config(excluded_projects=["internal-tools"])
+        assert cfg.should_exclude("hello", "internal-tools") is True
+
+    def test_no_match_returns_false(self) -> None:
+        cfg = Config(
+            exclude_patterns=["secret"],
+            excluded_projects=["private-*"],
+        )
+        assert cfg.should_exclude("normal message", "public-repo") is False
+
+    def test_invalid_regex_does_not_crash(self) -> None:
+        cfg = Config(exclude_patterns=["[invalid", "secret"])
+        # "[invalid" is bad regex — should be skipped, "secret" should match
+        assert cfg.should_exclude("a secret", "proj") is True
+
+    def test_invalid_regex_alone_returns_false(self) -> None:
+        cfg = Config(exclude_patterns=["[invalid"])
+        assert cfg.should_exclude("normal message", "proj") is False
+
+    def test_invalid_regex_logs_when_debug(self, capsys: pytest.CaptureFixture) -> None:
+        cfg = Config(exclude_patterns=["[invalid"], debug=True)
+        cfg.should_exclude("test", "proj")
+        captured = capsys.readouterr()
+        assert "invalid regex" in captured.err
+
+    def test_invalid_regex_silent_when_not_debug(
+        self, capsys: pytest.CaptureFixture
+    ) -> None:
+        cfg = Config(exclude_patterns=["[invalid"], debug=False)
+        cfg.should_exclude("test", "proj")
+        captured = capsys.readouterr()
+        assert captured.err == ""
+
+    def test_empty_patterns_returns_false(self) -> None:
+        cfg = Config()
+        assert cfg.should_exclude("any message", "any project") is False
+
+    def test_fnmatch_glob_patterns(self) -> None:
+        cfg = Config(excluded_projects=["secret-*"])
+        assert cfg.should_exclude("msg", "secret-project") is True
+        assert cfg.should_exclude("msg", "secret-") is True
+        assert cfg.should_exclude("msg", "not-secret") is False
+
+    def test_fnmatch_question_mark(self) -> None:
+        cfg = Config(excluded_projects=["proj-?"])
+        assert cfg.should_exclude("msg", "proj-A") is True
+        assert cfg.should_exclude("msg", "proj-AB") is False
+
+    def test_message_match_short_circuits(self) -> None:
+        """If message matches, project check is irrelevant."""
+        cfg = Config(exclude_patterns=["secret"], excluded_projects=[])
+        assert cfg.should_exclude("secret data", "any-project") is True
+
+    def test_project_match_short_circuits(self) -> None:
+        """If project matches, message content is irrelevant."""
+        cfg = Config(exclude_patterns=[], excluded_projects=["banned-*"])
+        assert cfg.should_exclude("harmless message", "banned-repo") is True
+
+
+# -- Recall config fields -----------------------------------------------------
+
+
+@pytest.mark.usefixtures("_clean_env")
+class TestRecallDefaults:
+    def test_recall_defaults(self, tmp_path: Path) -> None:
+        cfg = Config.load(config_path=tmp_path / "nonexistent.json")
+        assert cfg.recall_enabled is False
+        assert cfg.recall_max_results == 3
+        assert cfg.recall_cooldown_seconds == 60
+
+    def test_recall_from_json(self, config_file: Path) -> None:
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            json.dumps(
+                {
+                    "recall_enabled": True,
+                    "recall_max_results": 10,
+                    "recall_cooldown_seconds": 300,
+                }
+            )
+        )
+        cfg = Config.load(config_path=config_file)
+        assert cfg.recall_enabled is True
+        assert cfg.recall_max_results == 10
+        assert cfg.recall_cooldown_seconds == 300
+
+    def test_recall_from_env(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        monkeypatch.setenv("COMPANION_RECALL_ENABLED", "true")
+        monkeypatch.setenv("COMPANION_RECALL_MAX_RESULTS", "5")
+        monkeypatch.setenv("COMPANION_RECALL_COOLDOWN_SECONDS", "120")
+        cfg = Config.load(config_path=tmp_path / "none.json")
+        assert cfg.recall_enabled is True
+        assert cfg.recall_max_results == 5
+        assert cfg.recall_cooldown_seconds == 120
+
+    def test_recall_env_overrides_json(
+        self, config_file: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        config_file.parent.mkdir(parents=True)
+        config_file.write_text(
+            json.dumps(
+                {
+                    "recall_enabled": False,
+                    "recall_max_results": 3,
+                    "recall_cooldown_seconds": 60,
+                }
+            )
+        )
+        monkeypatch.setenv("COMPANION_RECALL_ENABLED", "1")
+        monkeypatch.setenv("COMPANION_RECALL_MAX_RESULTS", "7")
+        monkeypatch.setenv("COMPANION_RECALL_COOLDOWN_SECONDS", "180")
+        cfg = Config.load(config_path=config_file)
+        assert cfg.recall_enabled is True
+        assert cfg.recall_max_results == 7
+        assert cfg.recall_cooldown_seconds == 180

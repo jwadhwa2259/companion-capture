@@ -35,6 +35,9 @@ print(f'COMPANION_LOG_DIR={q(c.log_dir)}')
 print(f'COMPANION_ROTATION_DAYS={c.rotation_days}')
 print(f'COMPANION_ARCHIVE_DAYS={c.archive_days}')
 print(f'COMPANION_DEBUG={str(c.debug).lower()}')
+print(f'COMPANION_RECALL_ENABLED={str(c.recall_enabled).lower()}')
+print(f'COMPANION_RECALL_MAX_RESULTS={c.recall_max_results}')
+print(f'COMPANION_RECALL_COOLDOWN_SECONDS={c.recall_cooldown_seconds}')
 print(f'COMPANION_CAPTURES_FILE={q(str(c.captures_file))}')
 print(f'COMPANION_DEBUG_FILE={q(str(c.debug_file))}')
 print(f'COMPANION_ARCHIVE_FILE={q(str(c.archive_file))}')
@@ -45,6 +48,7 @@ print(f'COMPANION_ARCHIVE_FILE={q(str(c.archive_file))}')
 export COMPANION_NAME COMPANION_OUTPUT_DIR COMPANION_LOG_DIR
 export COMPANION_ROTATION_DAYS COMPANION_ARCHIVE_DAYS COMPANION_DEBUG
 export COMPANION_CAPTURES_FILE COMPANION_DEBUG_FILE COMPANION_ARCHIVE_FILE
+export COMPANION_RECALL_ENABLED COMPANION_RECALL_MAX_RESULTS COMPANION_RECALL_COOLDOWN_SECONDS
 
 LOG_DIR="$COMPANION_LOG_DIR"
 mkdir -p "$LOG_DIR"

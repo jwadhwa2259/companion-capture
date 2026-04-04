@@ -2,6 +2,7 @@
 
 import json
 import os
+import re  # noqa: used by _SINCE_RE at module level
 import shutil  # noqa
 import sys
 import time
@@ -525,6 +526,388 @@ def migrate() -> int:
     return 0
 
 
+# --- import subcommand --------------------------------------------------------
+
+
+def import_captures(dry_run: bool = False) -> int:
+    """Import existing markdown captures into SQLite. Returns exit code."""
+    from companion_capture.importer import (
+        discover_files,
+        import_to_store,
+        parse_markdown_file,
+    )
+    from companion_capture.store import CaptureStore
+
+    try:
+        config = Config.load()
+    except (ValueError, OSError, json.JSONDecodeError):
+        config = Config()
+
+    files = discover_files(config)
+
+    if not files:
+        print("[companion-capture] No capture files found to import.")
+        return 0
+
+    print(f"[companion-capture] Found {len(files)} file(s) to import:")
+    for f in files:
+        print(f"[companion-capture]   {f.name}")
+
+    all_entries = []
+    errors = []
+    for f in files:
+        try:
+            entries = parse_markdown_file(f)
+        except OSError as exc:
+            errors.append(f"Failed to read {f.name}: {exc}")
+            print(f"[companion-capture]   {f.name}: read error — {exc}")
+            continue
+        print(f"[companion-capture]   {f.name}: {len(entries)} entries parsed")
+        all_entries.extend(entries)
+
+    if not all_entries:
+        print("[companion-capture] No entries found in capture files.")
+        return 0
+
+    if dry_run:
+        print(
+            f"\n[companion-capture] Dry run: {len(all_entries)} entries would be imported."
+        )
+        return 0
+
+    with CaptureStore(config.db_path) as store:
+        result = import_to_store(store, all_entries)
+
+    print("\n[companion-capture] --- Import summary ---")
+    print(f"[companion-capture]   Files scanned: {len(files)}")
+    print(f"[companion-capture]   Entries parsed: {result.entries_parsed}")
+    print(f"[companion-capture]   Imported: {result.entries_imported}")
+    print(f"[companion-capture]   Skipped (already in DB): {result.entries_skipped}")
+
+    if result.errors:
+        print(f"[companion-capture]   Errors: {len(result.errors)}")
+        for err in result.errors:
+            print(f"[companion-capture]     {err}")
+
+    return 1 if result.errors else 0
+
+
+# --- query subcommands -------------------------------------------------------
+
+_SINCE_RE = re.compile(r"^(\d+)([mhdw])$")
+
+
+def parse_since(value: str) -> str:
+    """Parse a relative duration string and return an ISO 8601 UTC datetime.
+
+    Supported formats: "30m", "24h", "7d", "2w".
+    Raises ValueError on invalid input.
+    """
+    import datetime as _dt  # noqa
+
+    if not value:
+        raise ValueError("Invalid duration: empty string")
+
+    m = _SINCE_RE.match(value)
+    if not m:
+        raise ValueError(
+            f"Invalid duration: {value!r} (expected format like '7d', '24h', '2w', '30m')"
+        )
+
+    amount = int(m.group(1))
+    unit = m.group(2)
+
+    if amount <= 0:
+        raise ValueError(f"Invalid duration: {value!r} (amount must be positive)")
+
+    unit_map = {
+        "m": "minutes",
+        "h": "hours",
+        "d": "days",
+        "w": "weeks",
+    }
+
+    delta = _dt.timedelta(**{unit_map[unit]: amount})
+    ts = _dt.datetime.now(_dt.timezone.utc) - delta
+    return ts.isoformat()
+
+
+def _format_capture(row: dict) -> str:
+    """Format a single capture row for display."""
+    ts = row.get("timestamp", "")[:16].replace("T", " ")
+    classification = row.get("classification", "")
+    project = row.get("project")
+    text = row.get("raw_text", "")
+
+    parts = [f"[{ts}]"]
+    if classification:
+        parts.append(f"[{classification}]")
+    if project:
+        parts.append(f"({project})")
+    parts.append(text)
+
+    return " ".join(parts)
+
+
+def cmd_search(args) -> int:
+    """Search captures by query string."""
+    from companion_capture.store import CaptureStore
+
+    since = None
+    if args.since:
+        try:
+            since = parse_since(args.since)
+        except ValueError as exc:
+            print(f"[companion-capture] Error: {exc}", file=sys.stderr)
+            return 1
+
+    try:
+        config = Config.load()
+    except (ValueError, OSError, json.JSONDecodeError):
+        config = Config()
+
+    with CaptureStore(config.db_path) as store:
+        results = store.search(
+            args.query,
+            project=args.project,
+            classification=args.classification,
+            since=since,
+            limit=args.limit,
+        )
+
+    if not results:
+        print("No captures found.")
+        return 0
+
+    for row in results:
+        print(_format_capture(row))
+
+    return 0
+
+
+def cmd_recent(args) -> int:
+    """Show most recent captures."""
+    from companion_capture.store import CaptureStore
+
+    try:
+        config = Config.load()
+    except (ValueError, OSError, json.JSONDecodeError):
+        config = Config()
+
+    with CaptureStore(config.db_path) as store:
+        results = store.recent(
+            project=args.project,
+            limit=args.limit,
+        )
+
+    if not results:
+        print("No captures found.")
+        return 0
+
+    for row in results:
+        print(_format_capture(row))
+
+    return 0
+
+
+def cmd_stats(args) -> int:
+    """Show capture statistics."""
+    from companion_capture.store import CaptureStore
+
+    try:
+        config = Config.load()
+    except (ValueError, OSError, json.JSONDecodeError):
+        config = Config()
+
+    with CaptureStore(config.db_path) as store:
+        data = store.stats()
+
+    if data["total"] == 0:
+        print("No captures in database.")
+        return 0
+
+    print(f"Captures: {data['total']}")
+
+    earliest = (data.get("earliest") or "")[:10]
+    latest = (data.get("latest") or "")[:10]
+    if earliest and latest:
+        print(f"Date range: {earliest} — {latest}")
+
+    by_project = data.get("by_project", {})
+    if by_project:
+        print()
+        print("By project:")
+        for name, count in sorted(by_project.items(), key=lambda x: -x[1]):
+            print(f"  {name}    {count}")
+
+    by_class = data.get("by_classification", {})
+    if by_class:
+        print()
+        print("By classification:")
+        for name, count in sorted(by_class.items(), key=lambda x: -x[1]):
+            print(f"  {name}    {count}")
+
+    return 0
+
+
+# --- redact subcommand -------------------------------------------------------
+
+_SCHEMA_COMMENT_RE = re.compile(r"^<!--\s*schema:\d+\s+id:")
+
+
+def redact_markdown_file(filepath: Path, pattern: str) -> int:
+    """Remove entries matching pattern from a markdown capture file.
+
+    Handles both new format (comment + entry line) and old format (entry only).
+    Returns count of removed entries.
+    """
+    if not filepath.exists():
+        return 0
+
+    try:
+        lines = filepath.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError:
+        return 0
+
+    kept: list[str] = []
+    removed = 0
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        # New format: <!-- schema:... --> comment followed by - [tag] line
+        if _SCHEMA_COMMENT_RE.match(line.strip()):
+            entry_line = lines[i + 1] if i + 1 < len(lines) else ""
+            if re.search(pattern, entry_line):
+                removed += 1
+                i += 2  # skip both comment and entry
+                continue
+            kept.append(line)
+            i += 1
+            continue
+
+        # Old format: bare - [tag] ... line (no preceding comment)
+        stripped = line.strip()
+        if stripped.startswith("- `[") and re.search(pattern, stripped):
+            removed += 1
+            i += 1
+            continue
+
+        kept.append(line)
+        i += 1
+
+    if removed > 0:
+        filepath.write_text("".join(kept), encoding="utf-8")
+
+    return removed
+
+
+def _count_markdown_matches(filepath: Path, pattern: str) -> int:
+    """Count entries that would be removed by redact, without modifying the file."""
+    if not filepath.exists():
+        return 0
+
+    try:
+        lines = filepath.read_text(encoding="utf-8").splitlines(keepends=True)
+    except OSError:
+        return 0
+
+    count = 0
+    i = 0
+
+    while i < len(lines):
+        line = lines[i]
+
+        if _SCHEMA_COMMENT_RE.match(line.strip()):
+            entry_line = lines[i + 1] if i + 1 < len(lines) else ""
+            if re.search(pattern, entry_line):
+                count += 1
+                i += 2
+                continue
+            i += 1
+            continue
+
+        stripped = line.strip()
+        if stripped.startswith("- `[") and re.search(pattern, stripped):
+            count += 1
+
+        i += 1
+
+    return count
+
+
+def cmd_redact(args) -> int:
+    """Redact captures matching a regex pattern from SQLite and markdown files."""
+    from companion_capture.store import CaptureStore
+
+    # Validate regex early
+    try:
+        re.compile(args.pattern)
+    except re.error as exc:
+        print(f"[companion-capture] Error: invalid regex: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        config = Config.load()
+    except (ValueError, OSError, json.JSONDecodeError):
+        config = Config()
+
+    md_files = [config.captures_file, config.debug_file, config.archive_file]
+
+    if not args.confirm:
+        # Dry-run: count matches without modifying anything
+        with CaptureStore(config.db_path) as store:
+            rows = (
+                store._conn.execute("SELECT raw_text FROM captures").fetchall()
+                if store._conn
+                else []
+            )
+            db_count = sum(1 for r in rows if re.search(args.pattern, r[0]))
+
+        md_total = 0
+        for f in md_files:
+            n = _count_markdown_matches(f, args.pattern)
+            if n > 0:
+                md_total += n
+                print(f"[companion-capture]   {f.name}: {n} entries match")
+
+        if db_count:
+            print(f"[companion-capture]   SQLite: {db_count} rows match")
+
+        total = db_count + md_total
+        if total == 0:
+            print("[companion-capture] No captures match the pattern.")
+        else:
+            print(
+                f"\n[companion-capture] {total} total matches. "
+                f"Re-run with --confirm to delete."
+            )
+        return 0
+
+    # Confirmed: actually delete
+    with CaptureStore(config.db_path) as store:
+        db_deleted = store.delete_matching(args.pattern)
+
+    md_deleted = 0
+    for f in md_files:
+        n = redact_markdown_file(f, args.pattern)
+        if n > 0:
+            md_deleted += n
+            print(f"[companion-capture]   {f.name}: {n} entries removed")
+
+    if db_deleted:
+        print(f"[companion-capture]   SQLite: {db_deleted} rows removed")
+
+    total = db_deleted + md_deleted
+    if total == 0:
+        print("[companion-capture] No captures matched the pattern.")
+    else:
+        print(f"\n[companion-capture] {total} total captures redacted.")
+
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(
         prog="companion-capture",
@@ -539,6 +922,47 @@ def main():
     subparsers.add_parser(
         "migrate", help="Migrate from Keel installation to companion-capture"
     )
+    import_parser = subparsers.add_parser(
+        "import", help="Import markdown captures into SQLite"
+    )
+    import_parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="Show what would be imported without writing to the database",
+    )
+
+    # Query subcommands
+    search_parser = subparsers.add_parser("search", help="Search captures")
+    search_parser.add_argument("query", help="Search query string")
+    search_parser.add_argument("--project", help="Filter by project name")
+    search_parser.add_argument("--since", help="Filter by age (e.g. 7d, 24h, 2w, 30m)")
+    search_parser.add_argument(
+        "--classification", help="Filter by classification (vibe, debug)"
+    )
+    search_parser.add_argument(
+        "--limit", type=int, default=20, help="Max results (default: 20)"
+    )
+
+    recent_parser = subparsers.add_parser("recent", help="Show most recent captures")
+    recent_parser.add_argument("--project", help="Filter by project name")
+    recent_parser.add_argument(
+        "-n", "--limit", type=int, default=20, help="Max results (default: 20)"
+    )
+
+    subparsers.add_parser("stats", help="Show capture statistics")
+
+    # Redact subcommand
+    redact_parser = subparsers.add_parser(
+        "redact", help="Delete captures matching a regex pattern"
+    )
+    redact_parser.add_argument(
+        "--pattern", required=True, help="Regex pattern to match against capture text"
+    )
+    redact_parser.add_argument(
+        "--confirm",
+        action="store_true",
+        help="Actually delete matches (without this flag, only shows what would be deleted)",
+    )
 
     args = parser.parse_args()
 
@@ -546,6 +970,16 @@ def main():
         sys.exit(doctor())
     elif args.command == "migrate":
         sys.exit(migrate())
+    elif args.command == "import":
+        sys.exit(import_captures(dry_run=args.dry_run))
+    elif args.command == "search":
+        sys.exit(cmd_search(args))
+    elif args.command == "recent":
+        sys.exit(cmd_recent(args))
+    elif args.command == "stats":
+        sys.exit(cmd_stats(args))
+    elif args.command == "redact":
+        sys.exit(cmd_redact(args))
     else:
         parser.print_help()
 
