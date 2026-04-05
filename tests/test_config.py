@@ -303,6 +303,38 @@ class TestDerivedPaths:
         assert "Goose-debug.md" in str(cfg.debug_file)
         assert "Goose-archive.md" in str(cfg.archive_file)
 
+    def test_captures_file_for_project(self, tmp_path: Path) -> None:
+        cfg = Config(companion_name="Keel", output_dir=str(tmp_path))
+        assert (
+            cfg.captures_file_for_project("my-app")
+            == tmp_path / "Keel-captures-my-app.md"
+        )
+
+    def test_debug_file_for_project(self, tmp_path: Path) -> None:
+        cfg = Config(companion_name="Keel", output_dir=str(tmp_path))
+        assert cfg.debug_file_for_project("my-app") == tmp_path / "Keel-debug-my-app.md"
+
+    def test_project_file_sanitizes_spaces(self, tmp_path: Path) -> None:
+        cfg = Config(companion_name="Keel", output_dir=str(tmp_path))
+        result = cfg.captures_file_for_project("Keel Implementation")
+        assert result == tmp_path / "Keel-captures-Keel-Implementation.md"
+
+    def test_project_file_sanitizes_special_chars(self, tmp_path: Path) -> None:
+        cfg = Config(companion_name="Keel", output_dir=str(tmp_path))
+        result = cfg.captures_file_for_project("my [project] (v2)")
+        assert result == tmp_path / "Keel-captures-my-project-v2.md"
+
+    def test_project_file_empty_name_fallback(self, tmp_path: Path) -> None:
+        cfg = Config(companion_name="Keel", output_dir=str(tmp_path))
+        result = cfg.captures_file_for_project("")
+        assert result == tmp_path / "Keel-captures-unknown.md"
+
+    def test_sanitize_project_name_collapses_hyphens(self) -> None:
+        assert Config._sanitize_project_name("a--b---c") == "a-b-c"
+
+    def test_sanitize_project_name_strips_edges(self) -> None:
+        assert Config._sanitize_project_name("-hello-") == "hello"
+
     def test_config_dir_is_fixed(self, tmp_path: Path) -> None:
         cfg = Config.load(config_path=tmp_path / "none.json")
         assert cfg.config_dir == Path("~/.companion-capture").expanduser()

@@ -472,10 +472,10 @@ def append_capture(
     entry_id = config.generate_entry_id()
     entry = f"{entry_id}\n- `[{tag}]` `{time_str}` `{project}` — {message}"
 
-    # Markdown write (primary)
+    # Markdown write (primary) — project-scoped files
     if tag == "debug":
         _append_entry(
-            config.debug_file,
+            config.debug_file_for_project(project),
             f"# {config.companion_name} — Debug Observations\n\n## Log\n",
             entry,
             today_header,
@@ -483,7 +483,7 @@ def append_capture(
         )
     else:
         _append_entry(
-            config.captures_file,
+            config.captures_file_for_project(project),
             f"# {config.companion_name} — Auto-Captures\n\n## Log\n",
             entry,
             today_header,
@@ -774,8 +774,12 @@ def sweep(log_path: str, config: Config, store: CaptureStore | None = None) -> N
     except OSError:
         return
 
+    project = get_project_name()
     existing_norm: set[str] = set()
-    for target in (config.captures_file, config.debug_file):
+    for target in (
+        config.captures_file_for_project(project),
+        config.debug_file_for_project(project),
+    ):
         try:
             for line in target.read_text().splitlines():
                 if line.startswith("- `["):

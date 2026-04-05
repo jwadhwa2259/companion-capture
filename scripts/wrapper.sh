@@ -25,10 +25,11 @@ PARSER="$SCRIPT_DIR/../src/companion_capture/parser.py"
 
 # Load config via Python helper (shlex.quote prevents shell injection)
 eval "$(python3 -c "
-import shlex
+import os, shlex
 from companion_capture.config import Config
 c = Config.load()
 q = shlex.quote
+project = os.path.basename(os.getcwd()) or 'unknown'
 print(f'COMPANION_NAME={q(c.companion_name)}')
 print(f'COMPANION_OUTPUT_DIR={q(c.output_dir)}')
 print(f'COMPANION_LOG_DIR={q(c.log_dir)}')
@@ -38,8 +39,8 @@ print(f'COMPANION_DEBUG={str(c.debug).lower()}')
 print(f'COMPANION_RECALL_ENABLED={str(c.recall_enabled).lower()}')
 print(f'COMPANION_RECALL_MAX_RESULTS={c.recall_max_results}')
 print(f'COMPANION_RECALL_COOLDOWN_SECONDS={c.recall_cooldown_seconds}')
-print(f'COMPANION_CAPTURES_FILE={q(str(c.captures_file))}')
-print(f'COMPANION_DEBUG_FILE={q(str(c.debug_file))}')
+print(f'COMPANION_CAPTURES_FILE={q(str(c.captures_file_for_project(project)))}')
+print(f'COMPANION_DEBUG_FILE={q(str(c.debug_file_for_project(project)))}')
 print(f'COMPANION_ARCHIVE_FILE={q(str(c.archive_file))}')
 " 2>/dev/null)" || {
     echo "[companion-capture] Warning: config load failed — running Claude without capture"

@@ -853,7 +853,15 @@ def cmd_redact(args) -> int:
     except (ValueError, OSError, json.JSONDecodeError):
         config = Config()
 
-    md_files = [config.captures_file, config.debug_file, config.archive_file]
+    # Collect all markdown files: per-project captures/debug + legacy global + archive
+    output_dir = Path(config.output_dir)
+    md_files = sorted(output_dir.glob(f"{config.companion_name}-captures-*.md"))
+    md_files += sorted(output_dir.glob(f"{config.companion_name}-debug-*.md"))
+    # Include legacy global files if they still exist
+    for legacy in (config.captures_file, config.debug_file):
+        if legacy.exists() and legacy not in md_files:
+            md_files.append(legacy)
+    md_files.append(config.archive_file)
 
     if not args.confirm:
         # Dry-run: count matches without modifying anything
