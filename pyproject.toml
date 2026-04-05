@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "companion-capture"
-version = "1.0.0"
+version = "2.0.0"
 description = "Capture AI companion speech bubble messages from Claude Code terminal sessions"
 readme = "README.md"
 license = "MIT"
