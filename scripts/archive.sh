@@ -5,7 +5,6 @@
 #
 # Run from wrapper.sh at session start.
 
-CAPTURES_FILE="${COMPANION_CAPTURES_FILE:-$HOME/.claude/Companion-captures.md}"
 ARCHIVE_FILE="${COMPANION_ARCHIVE_FILE:-$HOME/.claude/Companion-archive.md}"
 LOG_DIR="${COMPANION_LOG_DIR:-$HOME/.companion-capture/logs}"
 NAME="${COMPANION_NAME:-Companion}"
@@ -21,8 +20,7 @@ case "$ARCHIVE_DAYS" in ''|*[!0-9]*) ARCHIVE_DAYS=90 ;; esac
 if [ -d "$LOG_DIR" ]; then
     find "$LOG_DIR" -name "session_*.log" -mtime +3 -delete 2>/dev/null
 fi
-CAPTURES_DIR=$(dirname "$CAPTURES_FILE")
-rm -f "$CAPTURES_DIR/${NAME}-captures.tmp" "$CAPTURES_DIR/${NAME}-archive.tmp"
+rm -f "$OUTPUT_DIR/${NAME}-captures"*.tmp "$OUTPUT_DIR/${NAME}-archive.tmp"
 
 # Prune archive entries older than archive_days
 if [ -f "$ARCHIVE_FILE" ]; then
@@ -79,15 +77,19 @@ tmp.rename(archive)
     fi
 fi
 
-[ -f "$CAPTURES_FILE" ] || exit 0
-
+# Rotate all per-project capture files (glob pattern: NAME-captures-*.md)
 CUTOFF=$(date -v-${ROTATION_DAYS}d +%Y-%m-%d 2>/dev/null || date -d "${ROTATION_DAYS} days ago" +%Y-%m-%d 2>/dev/null)
 [ -z "$CUTOFF" ] && exit 0
 
-# Initialize archive if needed
-[ -f "$ARCHIVE_FILE" ] || echo "# ${NAME} — Archive" > "$ARCHIVE_FILE"
+HAS_CAPTURES=0
+for CAPTURES_FILE in "$OUTPUT_DIR/${NAME}-captures-"*.md; do
+    [ -f "$CAPTURES_FILE" ] || continue
+    HAS_CAPTURES=1
 
-python3 - "$CAPTURES_FILE" "$ARCHIVE_FILE" "$CUTOFF" << 'PYEOF'
+    # Initialize archive if needed (shared across all projects)
+    [ -f "$ARCHIVE_FILE" ] || echo "# ${NAME} — Archive" > "$ARCHIVE_FILE"
+
+    python3 - "$CAPTURES_FILE" "$ARCHIVE_FILE" "$CUTOFF" << 'PYEOF'
 import sys
 from pathlib import Path
 
@@ -156,5 +158,74 @@ tmp.write_text(new_content.rstrip() + "\n")
 tmp.rename(captures_path)
 
 archived_count = sum(1 for sec in archive for line in sec if line.startswith("- "))
-print(f"Archived {archived_count} entries older than {cutoff}")
+print(f"Archived {archived_count} entries from {captures_path.name} older than {cutoff}")
 PYEOF
+done
+
+# Also handle legacy global captures file if it still exists
+LEGACY_FILE="$OUTPUT_DIR/${NAME}-captures.md"
+if [ -f "$LEGACY_FILE" ]; then
+    [ -f "$ARCHIVE_FILE" ] || echo "# ${NAME} — Archive" > "$ARCHIVE_FILE"
+    python3 - "$LEGACY_FILE" "$ARCHIVE_FILE" "$CUTOFF" << 'PYEOF'
+import sys
+from pathlib import Path
+
+captures_path = Path(sys.argv[1])
+archive_path = Path(sys.argv[2])
+cutoff = sys.argv[3]
+
+content = captures_path.read_text()
+lines = content.split("\n")
+header_lines = []
+sections = []
+current_date = None
+current_lines = []
+
+in_log = False
+for line in lines:
+    if line.startswith("## Log"):
+        in_log = True
+        header_lines.append(line)
+        continue
+    if not in_log:
+        header_lines.append(line)
+        continue
+    if line.startswith("### "):
+        if current_date:
+            sections.append((current_date, current_lines))
+        current_date = line.replace("### ", "").strip()
+        current_lines = [line]
+    else:
+        current_lines.append(line)
+if current_date:
+    sections.append((current_date, current_lines))
+
+keep = []
+archive = []
+for date_str, sec_lines in sections:
+    if date_str >= cutoff:
+        keep.append(sec_lines)
+    else:
+        archive.append(sec_lines)
+
+if not archive:
+    sys.exit(0)
+
+archive_content = archive_path.read_text().rstrip()
+for sec in archive:
+    archive_content += "\n\n" + "\n".join(sec)
+tmp = archive_path.with_suffix('.tmp')
+tmp.write_text(archive_content.rstrip() + "\n")
+tmp.rename(archive_path)
+
+new_content = "\n".join(header_lines) + "\n"
+for sec in keep:
+    new_content += "\n" + "\n".join(sec)
+tmp = captures_path.with_suffix('.tmp')
+tmp.write_text(new_content.rstrip() + "\n")
+tmp.rename(captures_path)
+
+archived_count = sum(1 for sec in archive for line in sec if line.startswith("- "))
+print(f"Archived {archived_count} legacy entries older than {cutoff}")
+PYEOF
+fi

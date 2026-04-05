@@ -283,7 +283,18 @@ class TestConfigDbPath:
 
 
 class TestDualWrite:
-    def test_append_capture_writes_to_sqlite(self, tmp_path: Path) -> None:
+    _PROJECT = "test-project"
+
+    def _patch_project(self, monkeypatch):
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
+
+    def _cap(self, config):
+        return config.captures_file_for_project(self._PROJECT)
+
+    def test_append_capture_writes_to_sqlite(self, tmp_path: Path, monkeypatch) -> None:
+        self._patch_project(monkeypatch)
         config = _test_config(tmp_path)
         db = tmp_path / "test.db"
         with CaptureStore(db) as store:
@@ -299,16 +310,18 @@ class TestDualWrite:
             assert row["session_id"] == "s1"
             assert row["schema_version"] == SCHEMA_VERSION
 
-    def test_append_capture_without_store(self, tmp_path: Path) -> None:
+    def test_append_capture_without_store(self, tmp_path: Path, monkeypatch) -> None:
+        self._patch_project(monkeypatch)
         config = _test_config(tmp_path)
         # store=None (default) should not raise
         append_capture("No store here", "vibe", config, store=None)
         # Markdown file should still be written
-        assert config.captures_file.exists()
-        content = config.captures_file.read_text()
-        assert "No store here" in content
+        cap = self._cap(config)
+        assert cap.exists()
+        assert "No store here" in cap.read_text()
 
-    def test_sqlite_failure_is_silent(self, tmp_path: Path) -> None:
+    def test_sqlite_failure_is_silent(self, tmp_path: Path, monkeypatch) -> None:
+        self._patch_project(monkeypatch)
         config = _test_config(tmp_path)
         db = tmp_path / "test.db"
         store = CaptureStore(db)
@@ -320,13 +333,16 @@ class TestDualWrite:
             # Should not raise even though write will fail
             append_capture("This will fail silently", "vibe", config, store=store)
             # Markdown should still be written
-            assert config.captures_file.exists()
-            content = config.captures_file.read_text()
-            assert "This will fail silently" in content
+            cap = self._cap(config)
+            assert cap.exists()
+            assert "This will fail silently" in cap.read_text()
         finally:
             store.close()
 
-    def test_sqlite_failure_with_debug(self, tmp_path: Path, capsys) -> None:
+    def test_sqlite_failure_with_debug(
+        self, tmp_path: Path, capsys, monkeypatch
+    ) -> None:
+        self._patch_project(monkeypatch)
         config = _test_config(tmp_path)
         db = tmp_path / "test.db"
         store = CaptureStore(db, debug=True)
@@ -340,15 +356,16 @@ class TestDualWrite:
         finally:
             store.close()
 
-    def test_dual_write_entry_id_matches(self, tmp_path: Path) -> None:
+    def test_dual_write_entry_id_matches(self, tmp_path: Path, monkeypatch) -> None:
         """The UUID in the markdown and SQLite row should come from the same entry_id."""
+        self._patch_project(monkeypatch)
         config = _test_config(tmp_path)
         db = tmp_path / "test.db"
         with CaptureStore(db) as store:
             append_capture("match test", "vibe", config, store=store)
 
             # Get the UUID from the markdown file
-            md_content = config.captures_file.read_text()
+            md_content = self._cap(config).read_text()
             import re
 
             md_id = re.search(r"id:([0-9a-f-]+)", md_content)

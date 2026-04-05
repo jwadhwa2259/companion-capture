@@ -15,13 +15,20 @@ if [ ! -t 0 ]; then
     HOOK_INPUT=$(cat)
 fi
 
-CAPTURES_FILE="${COMPANION_CAPTURES_FILE:-$HOME/.claude/Companion-captures.md}"
-DEBUG_FILE="${COMPANION_DEBUG_FILE:-$HOME/.claude/Companion-debug.md}"
 LOG_DIR="${COMPANION_LOG_DIR:-$HOME/.companion-capture/logs}"
 NAME="${COMPANION_NAME:-Companion}"
+OUTPUT_DIR="${COMPANION_OUTPUT_DIR:-$HOME/.claude}"
 
-# Current project name — must match the tag in entries to be surfaced
+# Current project name — used for project-scoped file paths
 PROJECT=$(basename "${PWD}")
+
+# Sanitize project name for filename (mirrors Config._sanitize_project_name)
+SAFE_PROJECT=$(echo "$PROJECT" | sed 's/[^a-zA-Z0-9_-]/-/g' | sed 's/--*/-/g; s/^-//; s/-$//')
+[ -z "$SAFE_PROJECT" ] && SAFE_PROJECT="unknown"
+
+# Project-scoped capture files — each project gets its own file
+CAPTURES_FILE="${COMPANION_CAPTURES_FILE:-${OUTPUT_DIR}/${NAME}-captures-${SAFE_PROJECT}.md}"
+DEBUG_FILE="${COMPANION_DEBUG_FILE:-${OUTPUT_DIR}/${NAME}-debug-${SAFE_PROJECT}.md}"
 
 # Signal ALL running parsers to flush pending messages before we read
 for pidfile in "$LOG_DIR"/.parser-*.pid; do
@@ -76,8 +83,8 @@ check_file() {
 
     if [ "$TOTAL" -gt "$LAST" ]; then
         local NEW
-        # -F for literal match — project names with regex chars ([], () etc) are safe
-        NEW=$(tail -n +"$((LAST + 1))" "$FILE" | grep -E '^\- `\[(debug|vibe)\]` `[0-9]{2}:[0-9]{2}` ' | grep -F "\`${PROJECT}\`")
+        # File is already project-scoped — only need entry format filter
+        NEW=$(tail -n +"$((LAST + 1))" "$FILE" | grep -E '^\- `\[(debug|vibe)\]` `[0-9]{2}:[0-9]{2}` ')
         if [ -n "$NEW" ]; then
             echo "[$NAME ${LABEL}]"
             echo "$NEW"

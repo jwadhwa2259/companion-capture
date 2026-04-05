@@ -671,28 +671,43 @@ class TestAppendEntry:
 
 
 class TestAppendCapture:
-    def test_vibe_routes_to_captures(self, tmp_path):
+    _PROJECT = "test-project"
+
+    def test_vibe_routes_to_captures(self, tmp_path, monkeypatch):
         config = _test_config(tmp_path)
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         append_capture("Nice work!", "vibe", config)
-        assert config.captures_file.exists()
-        content = config.captures_file.read_text()
+        cap = config.captures_file_for_project(self._PROJECT)
+        dbg = config.debug_file_for_project(self._PROJECT)
+        assert cap.exists()
+        content = cap.read_text()
         assert "[vibe]" in content
         assert "Nice work!" in content
-        assert not config.debug_file.exists()
+        assert not dbg.exists()
 
-    def test_debug_routes_to_debug(self, tmp_path):
+    def test_debug_routes_to_debug(self, tmp_path, monkeypatch):
         config = _test_config(tmp_path)
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         append_capture("Found a bug", "debug", config)
-        assert config.debug_file.exists()
-        content = config.debug_file.read_text()
+        cap = config.captures_file_for_project(self._PROJECT)
+        dbg = config.debug_file_for_project(self._PROJECT)
+        assert dbg.exists()
+        content = dbg.read_text()
         assert "[debug]" in content
         assert "Found a bug" in content
-        assert not config.captures_file.exists()
+        assert not cap.exists()
 
-    def test_entry_format(self, tmp_path):
+    def test_entry_format(self, tmp_path, monkeypatch):
         config = _test_config(tmp_path)
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         append_capture("test message", "vibe", config)
-        content = config.captures_file.read_text()
+        content = config.captures_file_for_project(self._PROJECT).read_text()
         # Format: <!-- schema:1 id:... ts:... -->\n- `[tag]` `HH:MM` `project` — message
         lines = [ln for ln in content.splitlines() if ln.startswith("- `[")]
         assert len(lines) == 1
@@ -706,26 +721,35 @@ class TestAppendCapture:
 class TestAppendCaptureExclusion:
     """Privacy controls — exclusion at capture time."""
 
-    def test_exclude_pattern_blocks_write(self, tmp_path):
+    _PROJECT = "test-project"
+
+    def test_exclude_pattern_blocks_write(self, tmp_path, monkeypatch):
         config = Config(
             companion_name="TestCompanion",
             output_dir=str(tmp_path),
             log_dir=str(tmp_path / "logs"),
             exclude_patterns=[r"secret\b"],
         )
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         append_capture("this is secret info", "vibe", config)
-        assert not config.captures_file.exists()
+        assert not config.captures_file_for_project(self._PROJECT).exists()
 
-    def test_exclude_pattern_allows_non_matching(self, tmp_path):
+    def test_exclude_pattern_allows_non_matching(self, tmp_path, monkeypatch):
         config = Config(
             companion_name="TestCompanion",
             output_dir=str(tmp_path),
             log_dir=str(tmp_path / "logs"),
             exclude_patterns=[r"password"],
         )
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         append_capture("just a normal message", "vibe", config)
-        assert config.captures_file.exists()
-        assert "normal message" in config.captures_file.read_text()
+        cap = config.captures_file_for_project(self._PROJECT)
+        assert cap.exists()
+        assert "normal message" in cap.read_text()
 
     def test_excluded_project_blocks_write(self, tmp_path, monkeypatch):
         config = Config(
@@ -739,7 +763,7 @@ class TestAppendCaptureExclusion:
             lambda: "secret-project",
         )
         append_capture("hello world", "vibe", config)
-        assert not config.captures_file.exists()
+        assert not config.captures_file_for_project("secret-project").exists()
 
     def test_excluded_project_allows_non_matching(self, tmp_path, monkeypatch):
         config = Config(
@@ -753,14 +777,17 @@ class TestAppendCaptureExclusion:
             lambda: "public-project",
         )
         append_capture("hello world", "vibe", config)
-        assert config.captures_file.exists()
+        assert config.captures_file_for_project("public-project").exists()
 
-    def test_exclusion_blocks_sqlite_too(self, tmp_path):
+    def test_exclusion_blocks_sqlite_too(self, tmp_path, monkeypatch):
         config = Config(
             companion_name="TestCompanion",
             output_dir=str(tmp_path),
             log_dir=str(tmp_path / "logs"),
             exclude_patterns=[r"secret"],
+        )
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
         )
         from companion_capture.store import CaptureStore
 
@@ -769,24 +796,30 @@ class TestAppendCaptureExclusion:
             append_capture("this is secret", "vibe", config, store=store)
             assert store.recent(limit=10) == []
 
-    def test_exclusion_blocks_debug_too(self, tmp_path):
+    def test_exclusion_blocks_debug_too(self, tmp_path, monkeypatch):
         config = Config(
             companion_name="TestCompanion",
             output_dir=str(tmp_path),
             log_dir=str(tmp_path / "logs"),
             exclude_patterns=[r"token"],
         )
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         append_capture("auth token leaked", "debug", config)
-        assert not config.debug_file.exists()
+        assert not config.debug_file_for_project(self._PROJECT).exists()
 
-    def test_no_exclusion_writes_normally(self, tmp_path):
+    def test_no_exclusion_writes_normally(self, tmp_path, monkeypatch):
         config = Config(
             companion_name="TestCompanion",
             output_dir=str(tmp_path),
             log_dir=str(tmp_path / "logs"),
         )
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         append_capture("hello", "vibe", config)
-        assert config.captures_file.exists()
+        assert config.captures_file_for_project(self._PROJECT).exists()
 
 
 # =============================================================================
@@ -795,6 +828,8 @@ class TestAppendCaptureExclusion:
 
 
 class TestSweep:
+    _PROJECT = "test-project"
+
     def _make_log_with_goose(self, tmp_path, text_lines: list[str]) -> Path:
         """Write a log file containing goose + bubble with CR+LF (like script output)."""
         lines = goose_with_bubble(text_lines)
@@ -802,48 +837,66 @@ class TestSweep:
         log.write_text("\r\n".join(lines) + "\r\n")
         return log
 
-    def test_sweep_captures_message(self, tmp_path):
+    def test_sweep_captures_message(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         log = self._make_log_with_goose(tmp_path, ["Honk honk looking good today"])
         config = _test_config(tmp_path / "output")
         sweep(str(log), config)
-        assert config.captures_file.exists()
-        content = config.captures_file.read_text()
-        assert "looking good today" in content
+        cap = config.captures_file_for_project(self._PROJECT)
+        assert cap.exists()
+        assert "looking good today" in cap.read_text()
 
-    def test_sweep_deduplicates(self, tmp_path):
+    def test_sweep_deduplicates(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         log = self._make_log_with_goose(tmp_path, ["Already captured message"])
         config = _test_config(tmp_path / "output")
-        config.captures_file.parent.mkdir(parents=True, exist_ok=True)
-        config.captures_file.write_text(
+        cap = config.captures_file_for_project(self._PROJECT)
+        cap.parent.mkdir(parents=True, exist_ok=True)
+        cap.write_text(
             f"# {config.companion_name} — Auto-Captures\n\n## Log\n### 2026-04-03\n"
             "- `[vibe]` `12:00` `proj` — Already captured message\n"
         )
         sweep(str(log), config)
-        content = config.captures_file.read_text()
+        content = cap.read_text()
         # Should appear only once
         count = content.count("Already captured message")
         assert count == 1
 
-    def test_sweep_skips_short(self, tmp_path):
+    def test_sweep_skips_short(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         log = self._make_log_with_goose(tmp_path, ["Hi"])
         config = _test_config(tmp_path / "output")
         sweep(str(log), config)
+        cap = config.captures_file_for_project(self._PROJECT)
         # "Hi" is <= 8 chars, should be filtered
-        if config.captures_file.exists():
-            assert "Hi" not in config.captures_file.read_text()
+        if cap.exists():
+            assert "Hi" not in cap.read_text()
 
-    def test_sweep_routes_debug(self, tmp_path):
+    def test_sweep_routes_debug(self, tmp_path, monkeypatch):
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         log = self._make_log_with_goose(tmp_path, ["There might be a memory leak here"])
         config = _test_config(tmp_path / "output")
         sweep(str(log), config)
-        assert config.debug_file.exists()
-        assert "leak" in config.debug_file.read_text()
+        dbg = config.debug_file_for_project(self._PROJECT)
+        assert dbg.exists()
+        assert "leak" in dbg.read_text()
 
-    def test_sweep_nonexistent_file(self, tmp_path):
+    def test_sweep_nonexistent_file(self, tmp_path, monkeypatch):
         """sweep() on missing file does nothing, no crash."""
+        monkeypatch.setattr(
+            "companion_capture.parser.get_project_name", lambda: self._PROJECT
+        )
         config = _test_config(tmp_path / "output")
         sweep(str(tmp_path / "nonexistent.log"), config)
-        assert not config.captures_file.exists()
+        assert not config.captures_file_for_project(self._PROJECT).exists()
 
 
 # =============================================================================

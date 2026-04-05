@@ -127,13 +127,32 @@ class Config:
     def config_dir(self) -> Path:
         return CONFIG_DIR
 
+    @staticmethod
+    def _sanitize_project_name(project: str) -> str:
+        """Sanitize project name for safe use in filenames."""
+        safe = re.sub(r"[^\w-]", "-", project)
+        safe = re.sub(r"-+", "-", safe).strip("-")
+        return safe or "unknown"
+
     @property
     def captures_file(self) -> Path:
+        """Global captures path (used by importer for legacy files)."""
         return Path(self.output_dir) / f"{self.companion_name}-captures.md"
+
+    def captures_file_for_project(self, project: str) -> Path:
+        """Return project-scoped captures file path."""
+        safe = self._sanitize_project_name(project)
+        return Path(self.output_dir) / f"{self.companion_name}-captures-{safe}.md"
 
     @property
     def debug_file(self) -> Path:
+        """Global debug path (legacy fallback)."""
         return Path(self.output_dir) / f"{self.companion_name}-debug.md"
+
+    def debug_file_for_project(self, project: str) -> Path:
+        """Return project-scoped debug file path."""
+        safe = self._sanitize_project_name(project)
+        return Path(self.output_dir) / f"{self.companion_name}-debug-{safe}.md"
 
     @property
     def archive_file(self) -> Path:
